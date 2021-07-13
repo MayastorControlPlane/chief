@@ -175,14 +175,11 @@ impl Service {
 
     /// Get states from the registry
     pub(crate) async fn get_states(&self, _request: &GetStates) -> Result<States, SvcError> {
-        let states = self.registry.states.write().await;
-        let nexuses = states.get_nexus_states().await;
-        let replicas = states.get_replica_states().await;
-        let pools = states.get_pool_states().await;
+        let states = &*self.registry.states.read().unwrap();
         Ok(States {
-            nexuses,
-            pools,
-            replicas,
+            nexuses: states.get_nexus_states(),
+            pools: states.get_pool_states(),
+            replicas: states.get_replica_states(),
         })
     }
 }
