@@ -1,6 +1,6 @@
 use std::{convert::From, ops::Deref, sync::Arc};
 
-use tokio::sync::Mutex;
+use parking_lot::Mutex;
 
 use crate::{
     core::{
@@ -135,8 +135,8 @@ impl ResourceSpecs {
     /// Gets all VolumeSpec's
     pub(crate) async fn get_volumes(&self) -> Vec<VolumeSpec> {
         let mut vector = vec![];
-        for object in self.volumes.values() {
-            let object = object.lock().await;
+        for object in self.volumes.to_vec() {
+            let object = object.lock();
             vector.push(object.clone());
         }
         vector
@@ -160,8 +160,8 @@ impl ResourceSpecsLocked {
     async fn get_volume_replicas(&self, id: &VolumeId) -> Vec<Arc<Mutex<ReplicaSpec>>> {
         let mut replicas = vec![];
         let specs = self.read().await;
-        for replica in specs.replicas.values() {
-            let spec = replica.lock().await;
+        for replica in specs.replicas.to_vec() {
+            let spec = replica.lock();
             if spec.owners.owned_by(id) {
                 replicas.push(replica.clone());
             }
@@ -183,8 +183,8 @@ impl ResourceSpecsLocked {
     async fn get_volume_nexuses(&self, id: &VolumeId) -> Vec<Arc<Mutex<NexusSpec>>> {
         let mut nexuses = vec![];
         let specs = self.read().await;
-        for nexus in specs.nexuses.values() {
-            let spec = nexus.lock().await;
+        for nexus in specs.nexuses.to_vec() {
+            let spec = nexus.lock();
             if spec.owner.as_ref() == Some(id) {
                 nexuses.push(nexus.clone());
             }
@@ -291,7 +291,7 @@ impl ResourceSpecsLocked {
             let mut first_error = Ok(());
             let nexuses = self.get_volume_nexuses(&request.uuid).await;
             for nexus in nexuses {
-                let nexus = nexus.lock().await.deref().clone();
+                let nexus = nexus.lock().deref().clone();
                 if let Err(error) = self
                     .destroy_nexus(registry, &DestroyNexus::from(nexus), true)
                     .await
@@ -304,7 +304,7 @@ impl ResourceSpecsLocked {
 
             let replicas = self.get_volume_replicas(&request.uuid).await;
             for replica in replicas {
-                let spec = replica.lock().await.deref().clone();
+                let spec = replica.lock().deref().clone();
                 if let Some(node) = Self::get_replica_node(registry, &spec).await {
                     if let Err(error) = self
                         .destroy_replica(
@@ -468,7 +468,7 @@ impl ResourceSpecsLocked {
         let mut spec_status_pair = vec![];
         for status_replica in status_replicas.iter() {
             for locked_replica in spec_replicas.iter() {
-                let mut spec_replica = locked_replica.lock().await;
+                let mut spec_replica = locked_replica.lock();
                 if spec_replica.uuid == status_replica.uuid {
                     // todo: also check the health from etcd
                     // and that we don't have multiple replicas on the same node?
@@ -492,7 +492,7 @@ impl ResourceSpecsLocked {
                 break;
             }
             let (share, unshare) = {
-                let spec = spec.lock().await;
+                let spec = spec.lock();
                 let local = &status.node == target_node;
                 (
                     local && (spec.share.shared() | status.share.shared()),
@@ -676,7 +676,7 @@ impl SpecOperations for VolumeSpec {
         self.start_op(VolumeOperation::Destroy);
     }
     async fn remove_spec(locked_spec: &Arc<Mutex<Self>>, registry: &Registry) {
-        let uuid = locked_spec.lock().await.uuid.clone();
+        let uuid = locked_spec.lock().uuid.clone();
         registry.specs.remove_volume(&uuid).await;
     }
     fn set_updating(&mut self, updating: bool) {

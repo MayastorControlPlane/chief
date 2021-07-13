@@ -1,7 +1,7 @@
+use parking_lot::Mutex;
 use std::sync::Arc;
 
 use snafu::OptionExt;
-use tokio::sync::Mutex;
 
 use crate::core::{
     registry::Registry,
@@ -73,7 +73,7 @@ impl SpecOperations for NexusSpec {
         self.start_op(NexusOperation::Destroy);
     }
     async fn remove_spec(locked_spec: &Arc<Mutex<Self>>, registry: &Registry) {
-        let uuid = locked_spec.lock().await.uuid.clone();
+        let uuid = locked_spec.lock().uuid.clone();
         registry.specs.remove_nexus(&uuid).await;
     }
     fn set_updating(&mut self, updating: bool) {
@@ -108,8 +108,8 @@ impl ResourceSpecs {
     /// Get all NexusSpec's
     pub async fn get_nexuses(&self) -> Vec<NexusSpec> {
         let mut vector = vec![];
-        for object in self.nexuses.values() {
-            let object = object.lock().await;
+        for object in self.nexuses.to_vec() {
+            let object = object.lock();
             vector.push(object.clone());
         }
         vector
@@ -117,8 +117,8 @@ impl ResourceSpecs {
     /// Get all NexusSpec's which are in a created state
     pub async fn get_created_nexuses(&self) -> Vec<NexusSpec> {
         let mut nexuses = vec![];
-        for nexus in self.nexuses.values() {
-            let nexus = nexus.lock().await;
+        for nexus in self.nexuses.to_vec() {
+            let nexus = nexus.lock();
             if nexus.state.created() || nexus.state.deleting() {
                 nexuses.push(nexus.clone());
             }
@@ -319,7 +319,7 @@ impl ResourceSpecsLocked {
     /// Get a vector of protected NexusSpec's
     pub async fn get_nexuses(&self) -> Vec<Arc<Mutex<NexusSpec>>> {
         let specs = self.read().await;
-        specs.nexuses.values().cloned().collect()
+        specs.nexuses.to_vec()
     }
 
     /// Worker that reconciles dirty NexusSpecs's with the persistent store.
@@ -331,18 +331,22 @@ impl ResourceSpecsLocked {
 
             let nexuses = self.get_nexuses().await;
             for nexus_spec in nexuses {
-                let mut nexus = nexus_spec.lock().await;
-                if nexus.updating || !nexus.state.created() {
-                    continue;
-                }
-                if let Some(op) = nexus.operation.clone() {
-                    let mut nexus_clone = nexus.clone();
+                let mut nexus_clone = {
+                    let mut nexus = nexus_spec.lock();
+                    if nexus.updating || !nexus.state.created() {
+                        continue;
+                    }
+                    nexus.updating = true;
+                    nexus.clone()
+                };
 
+                if let Some(op) = nexus_clone.operation.clone() {
                     let fail = !match op.result {
                         Some(true) => {
                             nexus_clone.commit_op();
                             let result = registry.store_obj(&nexus_clone).await;
                             if result.is_ok() {
+                                let mut nexus = nexus_spec.lock();
                                 nexus.commit_op();
                             }
                             result.is_ok()
@@ -351,6 +355,7 @@ impl ResourceSpecsLocked {
                             nexus_clone.clear_op();
                             let result = registry.store_obj(&nexus_clone).await;
                             if result.is_ok() {
+                                let mut nexus = nexus_spec.lock();
                                 nexus.clear_op();
                             }
                             result.is_ok()
@@ -361,6 +366,7 @@ impl ResourceSpecsLocked {
                             nexus_clone.clear_op();
                             let result = registry.store_obj(&nexus_clone).await;
                             if result.is_ok() {
+                                let mut nexus = nexus_spec.lock();
                                 nexus.clear_op();
                             }
                             result.is_ok()
@@ -369,6 +375,10 @@ impl ResourceSpecsLocked {
                     if fail {
                         pending_count += 1;
                     }
+                } else {
+                    // No operation to reconcile.
+                    let mut spec = nexus_spec.lock();
+                    spec.updating = false;
                 }
             }
             pending_count > 0

@@ -24,7 +24,7 @@ impl Registry {
             .context(VolumeNotFound {
                 vol_id: volume_uuid.to_string(),
             })?;
-        let volume_spec = volume_spec.lock().await;
+        let volume_spec = volume_spec.lock();
 
         Ok(if let Some(first_nexus_status) = nexus_status.get(0) {
             Volume {
